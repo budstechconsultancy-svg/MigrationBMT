@@ -1,0 +1,59 @@
+# ============================================================
+#  RIM-BMT  —  .gitignore
+#  RIM Engine source code is PROPRIETARY & CONFIDENTIAL.
+#  Only the pre-compiled binary runtime is distributed.
+# ============================================================
+
+# ── Python artifacts ─────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.so
+# Whitelist pyarmor native binary runtimes
+!rim/pyarmor_runtime_000000/**/*.pyd
+!rim/pyarmor_runtime_000000/**/*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── RIM CORE SOURCE CODE (STRICTLY PROTECTED) ───────────────
+# The management commands contain the full RIM invariant engine.
+# These are NEVER pushed to any public or private repository.
+rim/management/commands/run_full_migration.py
+rim/management/commands/prod_migrate_tally.py
+rim/management/commands/migrate_tally.py
+rim/management/commands/__pycache__/
+rim/management/__pycache__/
+rim/__pycache__/
+
+# ── IP Protection: backup / original source files ────────────
+**/private_source/
+*.original
+*.bak
+*.source
+
+# ── Temporary migration artifacts & data ─────────────────────
+temp_*.xml
+temp_*.json
+*.sqlite3
+migration_output/
+exports/
+
+# ── Logs ─────────────────────────────────────────────────────
+*.log
+
+# ── Environment & Credentials ────────────────────────────────
+.env
+.env.*
+*.env
+
+# ── IDE / OS ─────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
