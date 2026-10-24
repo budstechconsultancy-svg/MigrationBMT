@@ -79,16 +79,18 @@ def resolve_and_validate_migration_runner(python_exe: str = None) -> dict:
     if env_rim_runner:
         candidates.append(os.path.abspath(env_rim_runner))
 
-    # Priority 2: Standard paths relative to current installation and common deployment locations
-    candidates.extend([
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "finpixe-latest", "backend", "manage.py")),
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "backend", "manage.py")),
-        "/home/ubuntu/finpixe-deploy/backend/manage.py",
-        "/home/ubuntu/finpixe-deploy/manage.py",
-        "/opt/finpixe/backend/manage.py",
-        r"C:\migration tool\finpixe-latest\backend\manage.py",
-        r"C:\Users\priya\Downloads\finpixe_rim001-main\finpixe_rim001-main\backend\manage.py"
-    ])
+    # Priority 2: Standard paths relative to current installation and common deployment locations (if no explicit env set)
+    if not candidates:
+        candidates.extend([
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "finpixe-latest", "backend", "manage.py")),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "backend", "manage.py")),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "manage.py")),
+            "/home/ubuntu/finpixe-deploy/backend/manage.py",
+            "/home/ubuntu/finpixe-deploy/manage.py",
+            "/opt/finpixe/backend/manage.py",
+            r"C:\migration tool\finpixe-latest\backend\manage.py",
+            r"C:\Users\priya\Downloads\finpixe_rim001-main\finpixe_rim001-main\backend\manage.py"
+        ])
 
     resolved_path = None
     for c in candidates:

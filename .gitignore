@@ -37,6 +37,7 @@ rim/__pycache__/
 *.source
 
 # ── Temporary migration artifacts & data ─────────────────────
+ec2_deployment_package/
 temp_*.xml
 temp_*.json
 *.sqlite3
