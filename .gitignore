@@ -38,6 +38,7 @@ rim/__pycache__/
 
 # ── Temporary migration artifacts & data ─────────────────────
 ec2_deployment_package/
+finpixe_backend_apps_for_ec2/
 temp_*.xml
 temp_*.json
 *.sqlite3
