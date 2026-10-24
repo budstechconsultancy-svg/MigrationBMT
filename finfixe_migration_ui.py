@@ -366,7 +366,7 @@ HTML_TEMPLATE = """
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-xs font-semibold text-gray-700 uppercase mb-1">Local Tally Folder Path</label>
-                                <input type="text" id="tally_path" name="tally_path" value="" placeholder="C:\TallyPrime\Data\10001" class="w-full px-3 py-2 border border-gray-300 rounded-md font-mono text-sm bg-white">
+                                <input type="text" id="tally_path" name="tally_path" value="" placeholder="C:\\TallyPrime\\Data\\10001" class="w-full px-3 py-2 border border-gray-300 rounded-md font-mono text-sm bg-white">
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-gray-700 uppercase mb-1">Tally ODBC/XML Port</label>
@@ -1518,7 +1518,7 @@ HTML_TEMPLATE = """
                     .replace(/\[SYSTEM\]/g, '<span class="text-gray-400 font-mono">[SYSTEM]</span>')
                     .replace(/\[ERROR\]/g, '<span class="text-red-400 font-mono font-bold">[ERROR]</span>')
                     .replace(/\[WARNING\]/g, '<span class="text-yellow-400 font-mono font-bold">[WARNING]</span>')
-                    .replace(/\n/g, '<br/>');
+                    .replace(/\\n/g, '<br/>');
 
                 if (!resObj.ok || result.status === 'error') {
                     const errorMsg = result.message || 'Migration execution halted.';
