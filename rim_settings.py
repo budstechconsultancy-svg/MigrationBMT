@@ -42,6 +42,7 @@ DOMAIN_APPS = [
     'payroll',
     'rbac',
     'transactions',
+    'ocr_pipeline',
     'rim',
 ]
 for app_name in DOMAIN_APPS:
