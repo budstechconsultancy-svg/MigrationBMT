@@ -50,6 +50,11 @@ exports/
 .env
 .env.*
 *.env
+*.pem
+*.key
+*.cert
+*.crt
+ec2_key.pem
 
 # ── IDE / OS ─────────────────────────────────────────────────
 .vscode/
