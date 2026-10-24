@@ -42,7 +42,16 @@ DOMAIN_APPS = [
     'payroll',
     'rbac',
     'transactions',
+    'dashboard',
+    'users',
+    'reports',
+    'vouchers',
     'ocr_pipeline',
+    'gst_reconciliation',
+    'bank_upload',
+    'bank_staging',
+    'pending_purchases',
+    'services',
     'rim',
 ]
 for app_name in DOMAIN_APPS:

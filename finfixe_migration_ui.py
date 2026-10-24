@@ -2265,8 +2265,7 @@ async def run_v3_migration(request: Request):
             python_exe, backend_manage_py, "run_full_migration",
             temp_xml_path,
             f"--tenant_id={tenant_id}",
-            f"--manifest_out={temp_manifest_path}",
-            "--skip-checks"
+            f"--manifest_out={temp_manifest_path}"
         ]
         if temp_master_path:
             command.append(f"--master_xml={temp_master_path}")
