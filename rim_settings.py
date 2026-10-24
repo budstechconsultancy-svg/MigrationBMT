@@ -28,8 +28,28 @@ ALLOWED_HOSTS = ['*']
 INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.auth',
+]
+
+# Register all domain apps present in directory
+DOMAIN_APPS = [
+    'core',
+    'company',
+    'masters',
+    'accounting',
+    'inventory',
+    'vendors',
+    'customerportal',
+    'payroll',
+    'rbac',
+    'transactions',
     'rim',
 ]
+for app_name in DOMAIN_APPS:
+    if (BASE_DIR / app_name).is_dir() or (BASE_DIR.parent / app_name).is_dir():
+        if app_name not in INSTALLED_APPS:
+            INSTALLED_APPS.append(app_name)
+if 'rim' not in INSTALLED_APPS:
+    INSTALLED_APPS.append('rim')
 
 DATABASES = {
     'default': {
