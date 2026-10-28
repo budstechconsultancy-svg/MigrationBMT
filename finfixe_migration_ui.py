@@ -756,6 +756,10 @@ HTML_TEMPLATE = """
                                 <span class="text-[10px] text-gray-400 font-mono">(15 chars)</span>
                             </div>
                         `;
+                    } else if (!entityName) {
+                        inputControlHtml = `
+                            <span class="text-xs text-slate-500 font-medium italic"><i class="fas fa-info-circle mr-1 text-blue-500"></i>Pre-processing system notification</span>
+                        `;
                     } else {
                         inputControlHtml = `
                             <div class="flex items-center space-x-2">
@@ -770,6 +774,22 @@ HTML_TEMPLATE = """
                         `;
                     }
 
+                    const actionButtonsHtml = !entityName ? `
+                        <button onclick="resolveAction('human-row-${idx}', 'Acknowledged & Cleared')" class="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded font-bold shadow-sm transition">
+                            <i class="fas fa-check mr-1"></i>Acknowledge
+                        </button>
+                        <button onclick="resolveAction('human-row-${idx}', 'Quarantined')" class="px-2.5 py-1 bg-gray-500 hover:bg-gray-600 text-white rounded font-bold transition">
+                            Quarantine
+                        </button>
+                    ` : `
+                        <button id="btn-save-${idx}" onclick="saveRectification('human-row-${idx}', '${escapedEntity}', 'rect-input-${idx}', '${fieldType}', '${entityType}', 'btn-save-${idx}')" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold shadow-sm transition">
+                            <i class="fas fa-check mr-1"></i>Save & Lock
+                        </button>
+                        <button onclick="resolveAction('human-row-${idx}', 'Quarantined for Audit')" class="px-2.5 py-1 bg-gray-500 hover:bg-gray-600 text-white rounded font-bold transition">
+                            Quarantine
+                        </button>
+                    `;
+
                     return `
                     <tr id="human-row-${idx}" class="hover:bg-slate-50 transition border-b border-gray-100">
                         <td class="py-3 font-bold text-gray-800">${ex.phase}</td>
@@ -779,12 +799,7 @@ HTML_TEMPLATE = """
                             ${inputControlHtml}
                         </td>
                         <td class="py-3 text-right space-x-1.5 whitespace-nowrap">
-                            <button id="btn-save-${idx}" onclick="saveRectification('human-row-${idx}', '${escapedEntity}', 'rect-input-${idx}', '${fieldType}', '${entityType}', 'btn-save-${idx}')" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold shadow-sm transition">
-                                <i class="fas fa-check mr-1"></i>Save & Lock
-                            </button>
-                            <button onclick="resolveAction('human-row-${idx}', 'Quarantined for Audit')" class="px-2.5 py-1 bg-gray-500 hover:bg-gray-600 text-white rounded font-bold transition">
-                                Quarantine
-                            </button>
+                            ${actionButtonsHtml}
                         </td>
                     </tr>
                 `;
@@ -1608,14 +1623,24 @@ async def rectify_record(request: Request):
                 else:
                     msg = f"Updated field {field_type} for Customer '{entity_name}'."
             else:
+                if not entity_name:
+                    conn.close()
+                    return {"status": "success", "message": "Pre-processing notice acknowledged and resolved.", "rows_updated": 0}
+
+                cursor.execute("DESCRIBE master_ledgers")
+                cols = [c[0].lower() for c in cursor.fetchall()]
+                target_col = 'ledger_type' if 'ledger_type' in cols else ('name' if 'name' in cols else ('ledger' if 'ledger' in cols else cols[0]))
+                
+                set_clauses = ["category = %s"]
+                params = [value]
+                if 'major_group' in cols:
+                    set_clauses.append("major_group = %s")
+                    params.append(value)
+                params.extend([tenant_id, entity_name])
+
                 cursor.execute(
-                    """
-                    UPDATE master_ledgers 
-                    SET category = %s, major_group = %s 
-                    WHERE tenant_id = %s 
-                      AND (ledger_type = %s OR ledger = %s)
-                    """,
-                    (value, value, tenant_id, entity_name, entity_name)
+                    f"UPDATE master_ledgers SET {', '.join(set_clauses)} WHERE tenant_id = %s AND `{target_col}` = %s",
+                    tuple(params)
                 )
                 rows = cursor.rowcount
                 cursor.execute(
