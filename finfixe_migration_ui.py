@@ -366,7 +366,7 @@ HTML_TEMPLATE = """
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-xs font-semibold text-gray-700 uppercase mb-1">Local Tally Folder Path</label>
-                                <input type="text" id="tally_path" name="tally_path" value="" placeholder="C:\\TallyPrime\\Data\\10001" class="w-full px-3 py-2 border border-gray-300 rounded-md font-mono text-sm bg-white">
+                                <input type="text" id="tally_path" name="tally_path" value="" placeholder="C:\\TallyPrime\\Data@01" class="w-full px-3 py-2 border border-gray-300 rounded-md font-mono text-sm bg-white">
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-gray-700 uppercase mb-1">Tally ODBC/XML Port</label>
@@ -1041,6 +1041,10 @@ HTML_TEMPLATE = """
                                 <span class="text-[10px] text-gray-400 font-mono">(15 chars)</span>
                             </div>
                         `;
+                    } else if (!entityName) {
+                        inputControlHtml = `
+                            <span class="text-xs text-slate-500 font-medium italic"><i class="fas fa-info-circle mr-1 text-blue-500"></i>Pre-processing system notification</span>
+                        `;
                     } else {
                         inputControlHtml = `
                             <div class="flex items-center space-x-2">
@@ -1055,6 +1059,22 @@ HTML_TEMPLATE = """
                         `;
                     }
 
+                    const actionButtonsHtml = !entityName ? `
+                        <button onclick="resolveAction('human-row-${idx}', 'Acknowledged & Cleared')" class="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded font-bold shadow-sm transition">
+                            <i class="fas fa-check mr-1"></i>Acknowledge
+                        </button>
+                        <button onclick="resolveAction('human-row-${idx}', 'Quarantined')" class="px-2.5 py-1 bg-gray-500 hover:bg-gray-600 text-white rounded font-bold transition">
+                            Quarantine
+                        </button>
+                    ` : `
+                        <button id="btn-save-${idx}" onclick="saveRectification('human-row-${idx}', '${escapedEntity}', 'rect-input-${idx}', '${fieldType}', '${entityType}', 'btn-save-${idx}')" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold shadow-sm transition">
+                            <i class="fas fa-check mr-1"></i>Save & Lock
+                        </button>
+                        <button onclick="resolveAction('human-row-${idx}', 'Quarantined for Audit')" class="px-2.5 py-1 bg-gray-500 hover:bg-gray-600 text-white rounded font-bold transition">
+                            Quarantine
+                        </button>
+                    `;
+
                     return `
                     <tr id="human-row-${idx}" class="hover:bg-slate-50 transition border-b border-gray-100">
                         <td class="py-3 font-bold text-gray-800">${ex.phase}</td>
@@ -1064,12 +1084,7 @@ HTML_TEMPLATE = """
                             ${inputControlHtml}
                         </td>
                         <td class="py-3 text-right space-x-1.5 whitespace-nowrap">
-                            <button id="btn-save-${idx}" onclick="saveRectification('human-row-${idx}', '${escapedEntity}', 'rect-input-${idx}', '${fieldType}', '${entityType}', 'btn-save-${idx}')" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold shadow-sm transition">
-                                <i class="fas fa-check mr-1"></i>Save & Lock
-                            </button>
-                            <button onclick="resolveAction('human-row-${idx}', 'Quarantined for Audit')" class="px-2.5 py-1 bg-gray-500 hover:bg-gray-600 text-white rounded font-bold transition">
-                                Quarantine
-                            </button>
+                            ${actionButtonsHtml}
                         </td>
                     </tr>
                 `;
