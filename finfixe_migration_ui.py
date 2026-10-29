@@ -1787,18 +1787,38 @@ async def reconcile_vouchers_endpoint(request: Request):
                 c.execute("SELECT * FROM vouchers WHERE id = %s", (fix['vch_id'],))
                 vch = c.fetchone()
                 if not existing and vch:
+                    c.execute("DESCRIBE master_ledgers")
+                    ml_cols = [col['Field'].lower() for col in c.fetchall()]
+                    name_col = 'ledger_type' if 'ledger_type' in ml_cols else ('name' if 'name' in ml_cols else 'ledger')
+                    
+                    c.execute(f"SELECT id FROM master_ledgers WHERE tenant_id = %s AND `{name_col}` = %s", (tenant_id, fix['ledger']))
+                    l_row = c.fetchone()
+                    if l_row:
+                        l_id = l_row['id']
+                    else:
+                        code_col = 'ledger_code' if 'ledger_code' in ml_cols else ('code' if 'code' in ml_cols else None)
+                        ins_cols = ["tenant_id", f"`{name_col}`", "`group`", "category", "major_group", "financial_reporting", "opening_balance", "opening_balance_type"]
+                        ins_vals = [tenant_id, fix['ledger'], 'Indirect Expenses', 'Expense', 'Expense', 'Profit & Loss', 0, 'Dr']
+                        if code_col:
+                            ins_cols.append(f"`{code_col}`")
+                            ins_vals.append(f"LED-{abs(hash(fix['ledger'])) % 1000000:06d}")
+                        col_names_str = ", ".join(ins_cols) + ", created_at, updated_at"
+                        placeholders = ", ".join(["%s"] * len(ins_vals)) + ", NOW(), NOW()"
+                        c.execute(f"INSERT INTO master_ledgers ({col_names_str}) VALUES ({placeholders})", tuple(ins_vals))
+                        l_id = c.lastrowid
+
                     c.execute("""
                         INSERT INTO entries (
                             tenant_id, voucher_type, voucher_id, voucher_number,
-                            transaction_date, narration, ledger_name, debit, credit,
+                            transaction_date, narration, ledger_id, ledger_id_val, ledger_name, debit, credit,
                             allocation_status, created_at, updated_at
                         ) VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, 'Unutilized', NOW(), NOW()
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'Unutilized', NOW(), NOW()
                         )
                     """, (
                         tenant_id, fix['type'], fix['vch_id'], fix['num'],
                         vch['date'], vch['narration'] or 'Auto-reconciled by RIM Cognition Engine',
-                        fix['ledger'], fix['debit'], fix['credit']
+                        l_id, l_id, fix['ledger'], fix['debit'], fix['credit']
                     ))
                 if vch:
                     c.execute("""
