@@ -382,12 +382,12 @@ HTML_TEMPLATE = """
                     <table class="w-full text-left text-sm">
                         <thead>
                             <tr class="text-xs font-bold text-gray-500 uppercase border-b border-gray-200 pb-2">
-                                <th class="py-3">Timestamp</th>
-                                <th class="py-3">Severity</th>
-                                <th class="py-3">Phase / Domain</th>
-                                <th class="py-3">Exception Description</th>
-                                <th class="py-3">System Action</th>
-                                <th class="py-3 text-right">RIM Action / Rectification</th>
+                                <th class="py-3 px-3">Timestamp</th>
+                                <th class="py-3 px-2">Severity</th>
+                                <th class="py-3 px-2">Phase / Domain</th>
+                                <th class="py-3 px-3">Exception Description & Context</th>
+                                <th class="py-3 px-3 whitespace-nowrap">System Action</th>
+                                <th class="py-3 px-3 text-right whitespace-nowrap">Resolution / Status</th>
                             </tr>
                         </thead>
                         <tbody id="errors-tbody" class="divide-y divide-gray-100 font-mono text-xs">
@@ -607,6 +607,7 @@ HTML_TEMPLATE = """
 
                     let descHtml = desc;
                     let actionControl = '';
+                    let systemActionHtml = `<span class="text-indigo-600 font-semibold">${ex.action || 'Auto-Processed'}</span>`;
 
                     if (isVch) {
                         let vchNum = ex.voucher_number || '';
@@ -622,38 +623,75 @@ HTML_TEMPLATE = """
                             id: ex.voucher_id || 'N/A'
                         };
 
+                        const drMatch = desc.match(/Dr=([0-9.]+)/i);
+                        const crMatch = desc.match(/Cr=([0-9.]+)/i);
+                        const dr = drMatch ? Number(drMatch[1]).toLocaleString('en-IN') : null;
+                        const cr = crMatch ? Number(crMatch[1]).toLocaleString('en-IN') : null;
+                        const diff = (drMatch && crMatch) ? Math.abs(Number(drMatch[1]) - Number(crMatch[1])).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : null;
+
+                        const typeLower = (meta.type || '').toLowerCase();
+                        const typeBadgeStyle = typeLower === 'sales' 
+                            ? 'bg-purple-50 text-purple-700 border-purple-200' 
+                            : (typeLower === 'purchase' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-slate-50 text-slate-700 border-slate-200');
+
                         descHtml = `
-                            <div class="space-y-1.5 py-1">
-                                <div class="flex flex-wrap items-center gap-1.5">
-                                    <span class="px-2 py-0.5 text-[10px] font-bold rounded uppercase tracking-wider ${meta.type.toLowerCase() === 'sales' ? 'bg-purple-100 text-purple-800 border border-purple-200' : (meta.type.toLowerCase() === 'purchase' ? 'bg-blue-100 text-blue-800 border border-blue-200' : 'bg-slate-100 text-slate-800 border border-slate-200')}">
-                                        <i class="fas fa-file-invoice mr-1"></i>${meta.type.toUpperCase()} VOUCHER
+                            <div class="bg-white border border-slate-200 rounded-lg p-3 shadow-xs space-y-2">
+                                <!-- Top Bar: Type, Voucher Number, Party, Date, ID & Total Amount -->
+                                <div class="flex items-center justify-between gap-3 pb-2 border-b border-slate-100 flex-wrap">
+                                    <div class="flex items-center gap-2 flex-wrap text-xs">
+                                        <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase border ${typeBadgeStyle}">
+                                            <i class="fas fa-file-invoice mr-1 opacity-70"></i>${meta.type}
+                                        </span>
+                                        <span class="font-bold text-slate-900 font-mono">Voucher #${vchNum}</span>
+                                        <span class="text-slate-300">·</span>
+                                        <span class="font-medium text-slate-700"><i class="fas fa-building text-slate-400 mr-1 text-[11px]"></i>${meta.party}</span>
+                                        <span class="text-slate-300">·</span>
+                                        <span class="text-slate-500 font-mono text-[11px]"><i class="fas fa-calendar-alt text-slate-400 mr-1 text-[11px]"></i>${meta.date}</span>
+                                    </div>
+                                    <div class="flex items-center gap-2 flex-shrink-0">
+                                        <span class="text-[10px] text-slate-400 font-mono bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200">ID #${meta.id}</span>
+                                        <span class="font-mono font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 text-xs">₹${meta.amount}</span>
+                                    </div>
+                                </div>
+
+                                <!-- Discrepancy Alert Strip -->
+                                <div class="flex items-center justify-between gap-2 text-xs bg-amber-50/90 border border-amber-200 rounded-md px-2.5 py-1.5 text-amber-900 flex-wrap">
+                                    <div class="flex items-center space-x-1.5">
+                                        <i class="fas fa-exclamation-triangle text-amber-600 flex-shrink-0"></i>
+                                        <span class="font-medium">
+                                            ${dr && cr ? `Discrepancy: <span class="font-mono font-bold text-amber-950">Dr ₹${dr}</span> vs <span class="font-mono font-bold text-amber-950">Cr ₹${cr}</span> (Variance: <span class="font-mono font-bold text-rose-700">₹${diff}</span>)` : desc}
+                                        </span>
+                                    </div>
+                                    <span class="text-[10px] font-semibold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-full inline-flex items-center gap-1 shadow-2xs">
+                                        <i class="fas fa-check-circle text-emerald-600"></i> Auto-Balanced
                                     </span>
-                                    <span class="font-mono font-bold text-gray-900 bg-white px-2 py-0.5 rounded border border-gray-300 shadow-sm text-xs">Voucher #${vchNum}</span>
-                                    <span class="text-emerald-700 font-bold font-mono text-xs bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">₹${meta.amount}</span>
-                                    <span class="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded text-[10px] font-mono border border-indigo-200">FinPixe ID: ${meta.id}</span>
                                 </div>
-                                <div class="text-xs text-gray-700 flex flex-wrap items-center gap-3">
-                                    <span><i class="fas fa-building text-gray-400 mr-1"></i><strong>Party:</strong> <span class="font-semibold text-gray-900">${meta.party}</span></span>
-                                    <span><i class="fas fa-calendar-alt text-gray-400 mr-1"></i><strong>Date:</strong> <span class="font-mono">${meta.date}</span></span>
-                                </div>
-                                <div class="text-[11px] text-amber-800 font-medium bg-amber-50 border border-amber-200 px-2 py-1 rounded">
-                                    <i class="fas fa-info-circle mr-1 text-amber-600"></i>${desc}
-                                </div>
-                                <div class="text-[11px] bg-slate-50 border border-slate-200 text-slate-700 p-2 rounded flex flex-wrap items-center justify-between gap-2">
-                                    <span><i class="fas fa-map-marker-alt text-rose-500 mr-1.5"></i><strong>Where in FinPixe:</strong> Vouchers &rarr; <span class="font-bold text-blue-700">${meta.type}</span> tab &rarr; Search <strong class="font-mono bg-white px-1 border border-gray-300 rounded">"${vchNum}"</strong> or Date <strong class="font-mono">${meta.date}</strong></span>
-                                    <button onclick="copyFinPixeSearch('${meta.type}', '${vchNum}', '${meta.party}', '${meta.date}')" class="text-[10px] bg-white hover:bg-slate-100 border border-gray-300 px-2 py-0.5 rounded font-bold text-gray-700 shadow-sm whitespace-nowrap">
-                                        <i class="fas fa-copy mr-1"></i>Copy Search Info
+
+                                <!-- Navigation & Copy Action Bar -->
+                                <div class="flex items-center justify-between text-[11px] text-slate-600 pt-0.5 bg-slate-50/70 border border-slate-200/80 rounded px-2.5 py-1.5">
+                                    <div class="flex items-center space-x-1.5 truncate">
+                                        <i class="fas fa-location-arrow text-indigo-500 text-[10px]"></i>
+                                        <span>FinPixe Location: <strong class="text-indigo-900 font-semibold">Vouchers &gt; ${meta.type}</strong> &gt; Search <code class="bg-white px-1.5 py-0.5 rounded text-slate-800 border border-slate-300 font-mono text-[10px]">"${vchNum}"</code> or Date <strong class="font-mono">${meta.date}</strong></span>
+                                    </div>
+                                    <button onclick="copyFinPixeSearch('${meta.type}', '${vchNum}', '${meta.party}', '${meta.date}')" class="inline-flex items-center text-[10px] bg-white hover:bg-slate-100 border border-slate-300 px-2 py-0.5 rounded font-semibold text-slate-700 shadow-2xs transition flex-shrink-0 ml-2">
+                                        <i class="fas fa-copy mr-1 text-slate-400"></i>Copy Search
                                     </button>
                                 </div>
                             </div>
                         `;
 
+                        systemActionHtml = `
+                            <span class="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-2xs">
+                                <i class="fas fa-bolt text-indigo-500 mr-1.5"></i>Auto-Balanced
+                            </span>
+                        `;
+
                         actionControl = `
-                            <div class="flex flex-col items-end space-y-1">
-                                <span class="px-2.5 py-1 bg-emerald-100 text-emerald-800 border border-emerald-200 rounded font-bold text-[11px] inline-flex items-center shadow-sm">
-                                    <i class="fas fa-check-double text-emerald-600 mr-1.5"></i>✅ Reconciled & Balanced by RIM
+                            <div class="inline-flex flex-col items-end">
+                                <span class="px-2.5 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-md font-bold text-xs inline-flex items-center shadow-2xs">
+                                    <i class="fas fa-check-double text-emerald-600 mr-1.5"></i>Reconciled
                                 </span>
-                                <span class="text-[10px] text-gray-400 font-mono">100% Equilibrium (Dr = Cr)</span>
+                                <span class="text-[10px] text-slate-400 font-mono mt-0.5">100% Equilibrium</span>
                             </div>
                         `;
                     } else if (isLedgerWarning && entityName) {
@@ -663,43 +701,59 @@ HTML_TEMPLATE = """
                         else if (dLower.includes('creditor') || dLower.includes('loan') || dLower.includes('liability')) defaultCat = 'Liability';
                         else if (dLower.includes('bank') || dLower.includes('cash') || dLower.includes('asset') || dLower.includes('debtor')) defaultCat = 'Asset';
 
+                        systemActionHtml = `
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">
+                                <i class="fas fa-clock mr-1 text-amber-500"></i>Action Required
+                            </span>
+                        `;
+
                         actionControl = `
                             <div class="flex items-center justify-end space-x-2">
-                                <select id="err-cat-${idx}" class="text-xs border border-indigo-300 rounded px-2 py-1 bg-white font-semibold text-indigo-900 shadow-sm focus:ring-1 focus:ring-indigo-500">
+                                <select id="err-cat-${idx}" class="text-xs border border-indigo-300 rounded px-2 py-1 bg-white font-semibold text-indigo-900 shadow-xs focus:ring-1 focus:ring-indigo-500">
                                     <option value="Expense" ${defaultCat === 'Expense' ? 'selected' : ''}>Expense</option>
                                     <option value="Asset" ${defaultCat === 'Asset' ? 'selected' : ''}>Asset</option>
                                     <option value="Liability" ${defaultCat === 'Liability' ? 'selected' : ''}>Liability</option>
                                     <option value="Income" ${defaultCat === 'Income' ? 'selected' : ''}>Income</option>
                                 </select>
-                                <button id="btn-err-fix-${idx}" onclick="saveErrorRectification('err-row-${idx}', '${escapedEntity}', 'err-cat-${idx}', '${idx}')" class="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded font-bold shadow-sm transition whitespace-nowrap">
+                                <button id="btn-err-fix-${idx}" onclick="saveErrorRectification('err-row-${idx}', '${escapedEntity}', 'err-cat-${idx}', '${idx}')" class="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded font-bold shadow-xs transition whitespace-nowrap text-xs">
                                     <i class="fas fa-bolt text-amber-300 mr-1"></i>Fix via RIM
                                 </button>
                             </div>
                         `;
                     } else if (isPan || isGstin) {
+                        systemActionHtml = `
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200">
+                                <i class="fas fa-user-edit mr-1 text-blue-500"></i>Human Review
+                            </span>
+                        `;
                         actionControl = `
                             <div class="flex items-center justify-end space-x-1.5">
-                                <button onclick="switchTab('human-touch')" class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs rounded font-bold shadow-sm transition">
+                                <button onclick="switchTab('human-touch')" class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs rounded font-bold shadow-xs transition">
                                     <i class="fas fa-user-check mr-1"></i>Human Review
                                 </button>
                             </div>
                         `;
                     } else {
+                        systemActionHtml = `
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-50 text-slate-700 border border-slate-200">
+                                ${ex.action || 'Pre-Sanitized'}
+                            </span>
+                        `;
                         actionControl = `
                             <div class="text-right">
-                                <span class="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded text-[11px] font-bold"><i class="fas fa-check-circle text-emerald-500 mr-1"></i>Pre-Sanitized by RIM</span>
+                                <span class="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded text-[11px] font-bold"><i class="fas fa-check-circle text-emerald-500 mr-1"></i>Pre-Sanitized</span>
                             </div>
                         `;
                     }
 
                     return `
-                    <tr id="err-row-${idx}" class="hover:bg-slate-50 transition border-b border-gray-100">
-                        <td class="py-3 text-gray-500 whitespace-nowrap">${ex.timestamp || manifest.timestamp}</td>
-                        <td class="py-3 whitespace-nowrap"><span class="px-2 py-0.5 ${ex.severity === 'CRITICAL' ? 'bg-red-100 text-red-800' : (ex.severity === 'WARNING' ? 'bg-yellow-100 text-yellow-800' : 'bg-blue-100 text-blue-800')} rounded font-bold">${ex.severity}</span></td>
-                        <td class="py-3 font-bold text-gray-700 whitespace-nowrap">${ex.phase}</td>
-                        <td class="py-3 text-gray-600">${descHtml}</td>
-                        <td class="py-3 text-indigo-600 font-semibold whitespace-nowrap">${isVch ? 'Auto-Balanced by RIM Substrate' : ex.action}</td>
-                        <td class="py-3 text-right" id="err-action-td-${idx}">${actionControl}</td>
+                    <tr id="err-row-${idx}" class="hover:bg-slate-50/70 transition border-b border-gray-100 align-top">
+                        <td class="py-3 px-3 text-gray-500 whitespace-nowrap font-mono text-[11px]">${ex.timestamp || manifest.timestamp}</td>
+                        <td class="py-3 px-2 whitespace-nowrap"><span class="px-2 py-0.5 ${ex.severity === 'CRITICAL' ? 'bg-red-100 text-red-800 border border-red-200' : (ex.severity === 'WARNING' ? 'bg-yellow-100 text-yellow-800 border border-yellow-200' : 'bg-blue-100 text-blue-800 border border-blue-200')} rounded font-bold text-[10px] uppercase">${ex.severity}</span></td>
+                        <td class="py-3 px-2 font-bold text-gray-700 whitespace-nowrap text-xs">${ex.phase}</td>
+                        <td class="py-3 px-3 text-gray-600">${descHtml}</td>
+                        <td class="py-3 px-3 whitespace-nowrap">${systemActionHtml}</td>
+                        <td class="py-3 px-3 text-right whitespace-nowrap" id="err-action-td-${idx}">${actionControl}</td>
                     </tr>
                     `;
                 }).join('');
