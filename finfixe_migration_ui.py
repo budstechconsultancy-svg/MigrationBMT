@@ -1865,11 +1865,11 @@ def health_check():
 @app.post("/api/test_db")
 async def test_database(request: Request):
     form = await request.form()
-    host = form.get("host") or "localhost"
-    port_str = form.get("port") or "3306"
-    database = form.get("database") or "finpixe"
-    user = form.get("user") or "root"
-    password = form.get("password") or ""
+    host = (form.get("host") or form.get("db_host") or "localhost").strip()
+    port_str = (form.get("port") or form.get("db_port") or "3306").strip()
+    database = (form.get("database") or form.get("db_name") or "finpixe").strip()
+    user = (form.get("user") or form.get("db_user") or "root").strip()
+    password = form.get("password") or form.get("db_password") or ""
 
     try:
         port = int(port_str)

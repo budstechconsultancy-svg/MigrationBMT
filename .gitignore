@@ -37,7 +37,7 @@ rim/__pycache__/
 *.source
 
 # ── Temporary migration artifacts & data ─────────────────────
-ec2_deployment_package/
+ec2_deployment_package*/
 finpixe_backend_apps_for_ec2*/
 finfixe_ui_update/
 *.tar.gz
