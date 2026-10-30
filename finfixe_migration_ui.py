@@ -1966,7 +1966,7 @@ async def rectify_record(request: Request):
                     UPDATE master_ledgers 
                     SET category = %s, major_group = %s 
                     WHERE tenant_id = %s 
-                      AND (ledger_type = %s OR ledger = %s)
+                      AND (ledger_type = %s OR `group` = %s)
                     """,
                     (value, value, tenant_id, entity_name, entity_name)
                 )
