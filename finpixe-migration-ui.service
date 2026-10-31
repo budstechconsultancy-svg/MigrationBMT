@@ -1,0 +1,16 @@
+[Unit]
+Description=FinPixe Migration Tool UI
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/opt/finpixe_migration_tool
+Environment="FINPIXE_BACKEND_MANAGE_PY=/opt/finpixe_migration_tool/manage.py"
+Environment="DJANGO_SETTINGS_MODULE=rim_settings"
+Environment="PATH=/opt/finpixe_migration_tool/venv311/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+ExecStart=/opt/finpixe_migration_tool/venv311/bin/uvicorn finfixe_migration_ui:app --host 0.0.0.0 --port 8888
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

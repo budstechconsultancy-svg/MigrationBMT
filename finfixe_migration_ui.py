@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import json
 import subprocess
 import shutil
@@ -8,7 +9,207 @@ import requests
 from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 import uvicorn
+
+
+def sanitize_diagnostics(text: str, secrets: list = None) -> str:
+    """Removes sensitive credentials, passwords, and tokens from diagnostic logs."""
+    if not text:
+        return ""
+    sanitized = str(text)
+    if secrets:
+        for secret in secrets:
+            if secret and str(secret).strip():
+                sanitized = sanitized.replace(str(secret), "********")
+    # Mask common credential patterns
+    sanitized = re.sub(r'(--db_password=)[^\s]+', r'\1********', sanitized, flags=re.IGNORECASE)
+    sanitized = re.sub(r'(password[:=]\s*)[^\s&]+', r'\1********', sanitized, flags=re.IGNORECASE)
+    sanitized = re.sub(r'(:[a-zA-Z0-9_\-\.]+@)', r':********@', sanitized)
+    sanitized = re.sub(r'(DJANGO_SECRET[:=]\s*)[^\s&]+', r'\1********', sanitized, flags=re.IGNORECASE)
+    return sanitized
+
+
+def find_python_interpreter() -> str:
+    """Finds a viable Python interpreter with required runtime modules."""
+    python_exe = sys.executable or "python"
+    try:
+        res = subprocess.run([python_exe, "-c", "import sys; print(sys.version)"], check=True, capture_output=True, text=True, timeout=5)
+        if res.returncode == 0:
+            return python_exe
+    except Exception:
+        pass
+
+    candidates = [
+        "/opt/finpixe_migration_tool/venv311/bin/python",
+        "/opt/finpixe_migration_tool/venv/bin/python",
+        "/home/ubuntu/finpixe-deploy/venv/bin/python",
+        r"C:\Users\priya\AppData\Local\Programs\Python\Python311\python.exe",
+        "python3",
+        "python"
+    ]
+    for cand in candidates:
+        try:
+            res = subprocess.run([cand, "-c", "import sys; print(sys.version)"], check=True, capture_output=True, text=True, timeout=5)
+            if res.returncode == 0:
+                return cand
+        except Exception:
+            continue
+    return python_exe
+
+
+def resolve_and_validate_migration_runner(python_exe: str = None) -> dict:
+    """
+    Locates and validates the Django backend migration runner (manage.py)
+    and verifies that the proprietary 'run_full_migration' management command is available.
+    """
+    if not python_exe:
+        python_exe = find_python_interpreter()
+
+    # Priority 1: Explicit environment variables
+    env_manage_py = os.getenv("FINPIXE_BACKEND_MANAGE_PY")
+    env_backend_dir = os.getenv("FINPIXE_BACKEND_DIR")
+    env_rim_runner = os.getenv("RIM_RUNNER_PATH")
+
+    candidates = []
+    if env_manage_py:
+        candidates.append(os.path.abspath(env_manage_py))
+    if env_backend_dir:
+        candidates.append(os.path.abspath(os.path.join(env_backend_dir, "manage.py")))
+    if env_rim_runner:
+        candidates.append(os.path.abspath(env_rim_runner))
+
+    # Priority 2: Standard paths relative to current installation and common deployment locations (if no explicit env set)
+    if not candidates:
+        candidates.extend([
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "finpixe-latest", "backend", "manage.py")),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "backend", "manage.py")),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "manage.py")),
+            "/home/ubuntu/finpixe-deploy/backend/manage.py",
+            "/home/ubuntu/finpixe-deploy/manage.py",
+            "/opt/finpixe/backend/manage.py",
+            r"C:\migration tool\finpixe-latest\backend\manage.py",
+            r"C:\Users\priya\Downloads\finpixe_rim001-main\finpixe_rim001-main\backend\manage.py"
+        ])
+
+    resolved_path = None
+    for c in candidates:
+        if c and os.path.isfile(c):
+            resolved_path = c
+            break
+
+    if not resolved_path:
+        checked_list = "\n".join(f"  • {c}" for c in candidates if c)
+        return {
+            "valid": False,
+            "runner_path": None,
+            "command_available": False,
+            "error_type": "MISSING_RUNNER",
+            "message": (
+                "Migration runner ('manage.py') not found in any configured or default location.\n\n"
+                "Root Cause Analysis:\n"
+                "1. The FinPixe Migration Tool repository is a standalone FastAPI interface and does not include Django's manage.py.\n"
+                "2. The proprietary 14-Phase RIM Invariant Migration Pipeline ('run_full_migration.py') is protected under trade-secret law\n"
+                "   and is not distributed in this repository (see rim/management/commands/README.md).\n\n"
+                "Required Action:\n"
+                "• Set the environment variable FINPIXE_BACKEND_MANAGE_PY to the path of your Django backend manage.py.\n"
+                "  Example: export FINPIXE_BACKEND_MANAGE_PY=/home/ubuntu/finpixe-deploy/backend/manage.py\n"
+                "• Ensure the proprietary RIM migration package (run_full_migration.py) is installed in that Django backend.\n"
+                "  For licensing inquiries: budstechconsultancy@gmail.com\n\n"
+                f"Checked candidate paths:\n{checked_list}"
+            ),
+            "diagnostics": f"Checked {len(candidates)} candidate paths; none exist as a regular file.",
+            "component_missing": "run_full_migration.py"
+        }
+
+    # Runner manage.py exists! Now check whether run_full_migration command is installed.
+    try:
+        proc = subprocess.run(
+            [python_exe, resolved_path, "run_full_migration", "--help"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            encoding='utf-8',
+            errors='replace'
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "valid": False,
+            "runner_path": resolved_path,
+            "command_available": False,
+            "error_type": "VERIFICATION_TIMEOUT",
+            "message": f"Verification timed out while probing '{resolved_path}' for command 'run_full_migration'.",
+            "diagnostics": "Subprocess verification exceeded 15s timeout.",
+            "component_missing": "run_full_migration.py"
+        }
+    except Exception as e:
+        return {
+            "valid": False,
+            "runner_path": resolved_path,
+            "command_available": False,
+            "error_type": "VERIFICATION_EXCEPTION",
+            "message": f"Failed to execute runner verification: {str(e)}",
+            "diagnostics": str(e),
+            "component_missing": "run_full_migration.py"
+        }
+
+    out = (proc.stdout or "") + (proc.stderr or "")
+    if proc.returncode != 0:
+        if "Unknown command" in out or "run_full_migration" not in out:
+            return {
+                "valid": False,
+                "runner_path": resolved_path,
+                "command_available": False,
+                "error_type": "MISSING_COMMAND",
+                "message": (
+                    f"Django backend manage.py was found at '{resolved_path}', but the proprietary management command "
+                    "'run_full_migration' is NOT registered in this backend.\n\n"
+                    "Root Cause:\n"
+                    "The genuine RIM 14-phase pipeline (rim/management/commands/run_full_migration.py) is a proprietary licensed component\n"
+                    "and is missing from the installed Django applications (see rim/management/commands/README.md).\n\n"
+                    "Action Required:\n"
+                    "Install the licensed RIM migration command module into your Django backend under <app>/management/commands/run_full_migration.py "
+                    "or contact Budstech Consultancy (budstechconsultancy@gmail.com) for license activation."
+                ),
+                "diagnostics": sanitize_diagnostics(out[:600]),
+                "component_missing": "run_full_migration.py"
+            }
+        else:
+            return {
+                "valid": False,
+                "runner_path": resolved_path,
+                "command_available": False,
+                "error_type": "VERIFICATION_FAILED",
+                "message": f"Verification of '{resolved_path} run_full_migration --help' failed with return code {proc.returncode}.",
+                "diagnostics": sanitize_diagnostics(out[:600]),
+                "component_missing": "run_full_migration.py"
+            }
+
+    # Verify that required arguments are recognized
+    help_text = proc.stdout or ""
+    required_args = ["--tenant_id", "--manifest_out"]
+    supported = all(arg in help_text for arg in required_args)
+    if not supported:
+        return {
+            "valid": False,
+            "runner_path": resolved_path,
+            "command_available": True,
+            "error_type": "INCOMPATIBLE_ARGUMENTS",
+            "message": f"The 'run_full_migration' command at '{resolved_path}' does not support required arguments (--tenant_id, --manifest_out).",
+            "diagnostics": sanitize_diagnostics(help_text[:600]),
+            "component_missing": "run_full_migration.py (compatible v3.0)"
+        }
+
+    return {
+        "valid": True,
+        "runner_path": resolved_path,
+        "command_available": True,
+        "error_type": None,
+        "message": f"Genuine RIM migration runner verified at '{resolved_path}'.",
+        "diagnostics": "Command verified with required arguments.",
+        "component_missing": None
+    }
+
 
 app = FastAPI(title="RIM-BMT (Business Migration Tool) - V3")
 
@@ -18,6 +219,35 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    sanitized = sanitize_diagnostics(str(exc))
+    if request.url.path.startswith("/api/"):
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "logs": f"[SYSTEM] Unhandled Server Exception: {sanitized}",
+                "message": sanitized
+            }
+        )
+    return HTMLResponse(content=f"<h1>500 Internal Server Error</h1><p>{sanitized}</p>", status_code=500)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    if request.url.path.startswith("/api/"):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "status": "error",
+                "logs": f"[SYSTEM] HTTP {exc.status_code}: {exc.detail}",
+                "message": str(exc.detail)
+            }
+        )
+    return HTMLResponse(content=f"<h1>HTTP {exc.status_code}</h1><p>{exc.detail}</p>", status_code=exc.status_code)
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -97,7 +327,10 @@ HTML_TEMPLATE = """
                 <h2 id="page-title" class="text-2xl font-bold text-gray-800">Enterprise 14-Phase Migration Pipeline</h2>
                 <p id="page-desc" class="text-xs text-gray-500 mt-0.5">Tally Prime to FinPixe Cloud ERP Business Migration Engine</p>
             </div>
-            <div class="flex items-center space-x-4">
+            <div class="flex items-center space-x-3">
+                <span id="top-runner-badge" class="flex items-center text-xs font-semibold text-amber-700 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-200">
+                    <span class="w-2 h-2 bg-amber-500 rounded-full mr-2"></span> RIM Runner: Checking...
+                </span>
                 <span id="top-status-badge" class="flex items-center text-xs font-semibold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-200">
                     <span class="w-2 h-2 bg-emerald-500 rounded-full mr-2 animate-pulse"></span> System 2 Invariants: READY
                 </span>
@@ -138,7 +371,7 @@ HTML_TEMPLATE = """
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-xs font-semibold text-gray-700 uppercase mb-1">Local Tally Folder Path</label>
-                                <input type="text" id="tally_path" name="tally_path" value="" placeholder="C:\TallyPrime\Data\10001" class="w-full px-3 py-2 border border-gray-300 rounded-md font-mono text-sm bg-white">
+                                <input type="text" id="tally_path" name="tally_path" value="" placeholder="C:\\TallyPrime\\Data@01" class="w-full px-3 py-2 border border-gray-300 rounded-md font-mono text-sm bg-white">
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-gray-700 uppercase mb-1">Tally ODBC/XML Port</label>
@@ -767,6 +1000,58 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
+        // Safe JSON Fetch utility to handle HTML error pages (e.g. Nginx 502/504) without 'Unexpected token <'
+        async function safeFetchJson(url, options = {}) {
+            try {
+                const response = await fetch(url, options);
+                const contentType = response.headers.get('content-type') || '';
+                if (contentType.includes('application/json')) {
+                    const data = await response.json();
+                    return { ok: response.ok, status: response.status, data };
+                }
+                const rawText = await response.text();
+                return {
+                    ok: false,
+                    status: response.status,
+                    data: {
+                        status: 'error',
+                        message: `Server returned non-JSON response (HTTP ${response.status} ${response.statusText}): ${rawText.slice(0, 300)}`,
+                        logs: `HTTP ${response.status} ${response.statusText}\n${rawText}`
+                    }
+                };
+            } catch (networkErr) {
+                return {
+                    ok: false,
+                    status: 0,
+                    data: {
+                        status: 'error',
+                        message: `Network/connectivity error: ${networkErr.message || networkErr}`,
+                        logs: `Connection failed: ${networkErr.message || networkErr}`
+                    }
+                };
+            }
+        }
+
+        async function checkRunnerHealth() {
+            try {
+                const res = await safeFetchJson('/api/health');
+                const badge = document.getElementById('top-runner-badge');
+                if (!badge) return;
+                const r = (res.data && res.data.runner) ? res.data.runner : {};
+                if (res.ok && r.valid) {
+                    badge.className = "flex items-center text-xs font-semibold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-200";
+                    badge.innerHTML = '<span class="w-2 h-2 bg-emerald-500 rounded-full mr-2"></span> Runner: Genuine RIM Verified';
+                } else if (res.ok && r.manage_py_found) {
+                    badge.className = "flex items-center text-xs font-semibold text-amber-700 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-200";
+                    badge.innerHTML = '<span class="w-2 h-2 bg-amber-500 rounded-full mr-2"></span> Backend Found (Cmd Missing)';
+                } else {
+                    badge.className = "flex items-center text-xs font-semibold text-rose-700 bg-rose-50 px-3 py-1.5 rounded-full border border-rose-200";
+                    badge.innerHTML = '<span class="w-2 h-2 bg-rose-500 rounded-full mr-2"></span> Runner: Missing';
+                }
+            } catch (e) {}
+        }
+        window.addEventListener('DOMContentLoaded', checkRunnerHealth);
+
         // Tab Navigation
         function switchTab(tabName) {
             const navs = ['dashboard', 'migration', 'audit', 'errors', 'human-touch', 'certificates'];
@@ -1223,14 +1508,14 @@ HTML_TEMPLATE = """
                 formData.append('field_type', fieldType);
                 formData.append('value', val);
 
-                const res = await fetch('/api/rectify', {
+                const resObj = await safeFetchJson('/api/rectify', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: formData.toString()
                 });
-                const resData = await res.json();
+                const resData = resObj.data || {};
 
-                if (resData.status === 'success') {
+                if (resObj.ok && resData.status === 'success') {
                     const row = document.getElementById(rowId);
                     if (row) {
                         row.className = "bg-emerald-50 transition";
@@ -1244,14 +1529,14 @@ HTML_TEMPLATE = """
                     toast.classList.remove('hidden');
                     setTimeout(() => { toast.classList.add('hidden'); }, 4000);
                 } else {
-                    alert('Error saving to database: ' + resData.message);
+                    alert('Error saving to database: ' + (resData.message || 'Operation failed.'));
                     if (btn) {
                         btn.disabled = false;
                         btn.innerHTML = '<i class="fas fa-check mr-1"></i>Save & Lock';
                     }
                 }
             } catch (err) {
-                alert('Network error connecting to rectification endpoint: ' + err.message);
+                alert('Network error connecting to rectification endpoint: ' + (err.message || err));
                 if (btn) {
                     btn.disabled = false;
                     btn.innerHTML = '<i class="fas fa-check mr-1"></i>Save & Lock';
@@ -1301,14 +1586,14 @@ HTML_TEMPLATE = """
                 formData.append('field_type', 'category');
                 formData.append('value', val);
 
-                const res = await fetch('/api/rectify', {
+                const resObj = await safeFetchJson('/api/rectify', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: formData.toString()
                 });
-                const resData = await res.json();
+                const resData = resObj.data || {};
 
-                if (resData.status === 'success') {
+                if (resObj.ok && resData.status === 'success') {
                     const row = document.getElementById(rowId);
                     if (row) {
                         row.className = "bg-emerald-50 transition border-b border-emerald-100";
@@ -1319,19 +1604,19 @@ HTML_TEMPLATE = """
                     }
                     const toast = document.getElementById('errors-toast');
                     if (toast) {
-                        toast.innerHTML = `<i class="fas fa-check-circle mr-1.5"></i> RIM Engine Updated: <strong>${entityName}</strong> reclassified to <span class="underline">${val}</span> in FinPixe DB (${resData.rows_updated} records).`;
+                        toast.innerHTML = `<i class="fas fa-check-circle mr-1.5"></i> RIM Engine Updated: <strong>${entityName}</strong> reclassified to <span class="underline">${val}</span> in FinPixe DB (${resData.rows_updated || 0} records).`;
                         toast.classList.remove('hidden');
                         setTimeout(() => { toast.classList.add('hidden'); }, 5000);
                     }
                 } else {
-                    alert('Error updating database: ' + resData.message);
+                    alert('Error updating database: ' + (resData.message || 'Operation failed.'));
                     if (btn) {
                         btn.disabled = false;
                         btn.innerHTML = '<i class="fas fa-bolt text-amber-300 mr-1"></i>Fix via RIM';
                     }
                 }
             } catch (err) {
-                alert('Network error connecting to rectification endpoint: ' + err.message);
+                alert('Network error connecting to rectification endpoint: ' + (err.message || err));
                 if (btn) {
                     btn.disabled = false;
                     btn.innerHTML = '<i class="fas fa-bolt text-amber-300 mr-1"></i>Fix via RIM';
@@ -1362,14 +1647,14 @@ HTML_TEMPLATE = """
                 formData.append('db_password', dbPassword);
                 formData.append('tenant_id', tenantId);
 
-                const res = await fetch('/api/rim_auto_fix', {
+                const resObj = await safeFetchJson('/api/rim_auto_fix', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: formData.toString()
                 });
-                const resData = await res.json();
+                const resData = resObj.data || {};
 
-                if (resData.status === 'success') {
+                if (resObj.ok && resData.status === 'success') {
                     // Update all ledger error rows in the UI
                     const rows = document.querySelectorAll('#errors-tbody tr');
                     rows.forEach((row, i) => {
@@ -1397,7 +1682,7 @@ HTML_TEMPLATE = """
                         setTimeout(() => { toast.classList.add('hidden'); }, 6000);
                     }
                 } else {
-                    alert('Error during RIM Auto-Fix: ' + resData.message);
+                    alert('Error during RIM Auto-Fix: ' + (resData.message || 'Operation failed.'));
                 }
             } catch (err) {
                 alert('Network error connecting to RIM Auto-Fix: ' + err.message);
@@ -1446,14 +1731,14 @@ HTML_TEMPLATE = """
                 formData.append('db_password', dbPassword);
                 formData.append('tenant_id', tenantId);
 
-                const res = await fetch('/api/reconcile_vouchers', {
+                const resObj = await safeFetchJson('/api/reconcile_vouchers', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: formData.toString()
                 });
-                const resData = await res.json();
+                const resData = resObj.data || {};
 
-                if (resData.status === 'success') {
+                if (resObj.ok && resData.status === 'success') {
                     const toast = document.getElementById('errors-toast');
                     if (toast) {
                         toast.innerHTML = `<i class="fas fa-check-circle mr-1.5"></i> ⚡ <strong>Voucher Equilibrium Achieved:</strong> ${resData.message}`;
@@ -1461,10 +1746,10 @@ HTML_TEMPLATE = """
                         setTimeout(() => { toast.classList.add('hidden'); }, 6000);
                     }
                 } else {
-                    alert('Error reconciling vouchers: ' + resData.message);
+                    alert('Error reconciling vouchers: ' + (resData.message || 'Operation failed.'));
                 }
             } catch (err) {
-                alert('Network error connecting to voucher reconciliation: ' + err.message);
+                alert('Network error connecting to voucher reconciliation: ' + (err.message || err));
             } finally {
                 if (btn) {
                     btn.disabled = false;
@@ -1518,13 +1803,13 @@ HTML_TEMPLATE = """
             payload.append('password', document.getElementById('db_password').value);
 
             try {
-                const response = await fetch('/api/test_db', {
+                const resObj = await safeFetchJson('/api/test_db', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: payload.toString()
                 });
-                const res = await response.json();
-                if (res.status === 'success') {
+                const res = resObj.data || {};
+                if (resObj.ok && res.status === 'success') {
                     statusDiv.style.backgroundColor = '#dcfce7';
                     statusDiv.style.color = '#166534';
                     statusDiv.style.border = '1px solid #86efac';
@@ -1533,7 +1818,7 @@ HTML_TEMPLATE = """
                     statusDiv.style.backgroundColor = '#fee2e2';
                     statusDiv.style.color = '#991b1b';
                     statusDiv.style.border = '1px solid #fca5a5';
-                    statusDiv.innerHTML = `<i class="fas fa-times-circle text-rose-600 mr-2 text-base"></i> <strong>Connection Failed:</strong> ${res.message}`;
+                    statusDiv.innerHTML = `<i class="fas fa-times-circle text-rose-600 mr-2 text-base"></i> <strong>Connection Failed:</strong> ${res.message || 'Unable to connect to database.'}`;
                 }
             } catch (err) {
                 statusDiv.style.backgroundColor = '#fee2e2';
@@ -1580,24 +1865,56 @@ HTML_TEMPLATE = """
             }
 
             try {
-                const response = await fetch('/api/run_v3', { method: 'POST', body: formData });
-                const result = await response.json();
+                const resObj = await safeFetchJson('/api/run_v3', { method: 'POST', body: formData });
+                const result = resObj.data || {};
                 
-                let formattedLogs = result.logs
+                const rawLogs = (result && (result.logs || result.message)) ? (result.logs || result.message) : 'No output logs received from migration runner.';
+                let formattedLogs = rawLogs
                     .replace(/✅/g, '<span class="text-blue-400 font-bold">✅</span>')
                     .replace(/❌/g, '<span class="text-red-500 font-bold">❌</span>')
                     .replace(/🚀/g, '<span class="text-purple-400 font-bold">🚀</span>')
-                    .replace(/\[SYSTEM\]/g, '<span class="text-gray-400">[SYSTEM]</span>');
-                outputBox.innerHTML = formattedLogs;
+                    .replace(/\[SYSTEM\]/g, '<span class="text-gray-400 font-mono">[SYSTEM]</span>')
+                    .replace(/\[ERROR\]/g, '<span class="text-red-400 font-mono font-bold">[ERROR]</span>')
+                    .replace(/\[WARNING\]/g, '<span class="text-yellow-400 font-mono font-bold">[WARNING]</span>')
+                    .replace(/\\n/g, '<br/>');
 
-                // Hydrate Dashboard, Invariant Matrix, Errors & Certificates Dynamically!
-                if (result.manifest) {
-                    localStorage.setItem('rim_live_manifest', JSON.stringify(result.manifest));
-                    hydrateViews(result.manifest);
+                if (!resObj.ok || result.status === 'error') {
+                    const errorMsg = result.message || 'Migration execution halted.';
+                    const missingNotice = result.component_missing 
+                        ? `<div class="mt-3 p-3 bg-amber-950/70 border border-amber-600/50 rounded-lg text-amber-200">
+                             <div class="font-bold flex items-center"><i class="fas fa-lock mr-2 text-amber-400"></i>Missing Licensed Component: <code>${result.component_missing}</code></div>
+                             <div class="text-[11px] mt-1 text-amber-300">The 14-Phase RIM Invariant Pipeline is proprietary intellectual property under commercial license from Budstech Consultancy. Contact: <a href="mailto:budstechconsultancy@gmail.com" class="underline text-indigo-300 font-bold">budstechconsultancy@gmail.com</a></div>
+                           </div>` 
+                        : '';
+
+                    outputBox.innerHTML = `
+                        <div class="p-4 mb-4 bg-red-950/90 border border-red-500/70 rounded-xl text-red-200 text-xs font-mono shadow-xl">
+                            <div class="flex items-center space-x-2 mb-2 text-red-400 font-bold text-sm">
+                                <i class="fas fa-exclamation-triangle text-base"></i>
+                                <span>Migration Execution Halted</span>
+                            </div>
+                            <p class="mb-2 leading-relaxed text-red-300">${errorMsg}</p>
+                            ${missingNotice}
+                        </div>
+                        <div class="font-mono text-xs leading-relaxed text-slate-300">${formattedLogs}</div>
+                    `;
+                } else {
+                    outputBox.innerHTML = `<div class="font-mono text-xs leading-relaxed text-slate-200">${formattedLogs}</div>`;
+                    if (result.manifest) {
+                        localStorage.setItem('rim_live_manifest', JSON.stringify(result.manifest));
+                        hydrateViews(result.manifest);
+                    }
                 }
-                
             } catch (error) {
-                outputBox.innerHTML = `<span class="text-red-500 font-bold">ERROR:</span> Backend unreachable.<br/>${error}`;
+                outputBox.innerHTML = `
+                    <div class="p-4 mb-4 bg-red-950/90 border border-red-500/70 rounded-xl text-red-200 text-xs font-mono">
+                        <div class="flex items-center space-x-2 mb-1 text-red-400 font-bold text-sm">
+                            <i class="fas fa-network-wired"></i>
+                            <span>Communication Error</span>
+                        </div>
+                        <p>${error.message || error}</p>
+                    </div>
+                `;
             } finally {
                 btn.disabled = false;
                 document.getElementById('btnSpinner').style.display = "none";
@@ -1868,14 +2185,34 @@ HTML_TEMPLATE = """
 def serve_ui():
     return HTMLResponse(content=HTML_TEMPLATE, status_code=200)
 
+@app.get("/api/health")
+def health_check():
+    """Health check endpoint exposing UI status, environment details, and runner status."""
+    runner_status = resolve_and_validate_migration_runner()
+    return {
+        "status": "online",
+        "version": "3.0.0",
+        "service": "FinPixe Migration Tool (RIM-BMT)",
+        "runner": {
+            "configured": bool(os.getenv("FINPIXE_BACKEND_MANAGE_PY")),
+            "manage_py_found": bool(runner_status.get("runner_path")),
+            "runner_path": runner_status.get("runner_path"),
+            "command_available": runner_status.get("command_available"),
+            "valid": runner_status.get("valid"),
+            "error_type": runner_status.get("error_type"),
+            "component_missing": runner_status.get("component_missing")
+        },
+        "python_interpreter": find_python_interpreter()
+    }
+
 @app.post("/api/test_db")
 async def test_database(request: Request):
     form = await request.form()
-    host = form.get("host") or "localhost"
-    port_str = form.get("port") or "3306"
-    database = form.get("database") or "finpixe"
-    user = form.get("user") or "root"
-    password = form.get("password") or ""
+    host = (form.get("host") or form.get("db_host") or "localhost").strip()
+    port_str = (form.get("port") or form.get("db_port") or "3306").strip()
+    database = (form.get("database") or form.get("db_name") or "finpixe").strip()
+    user = (form.get("user") or form.get("db_user") or "root").strip()
+    password = form.get("password") or form.get("db_password") or ""
 
     try:
         port = int(port_str)
@@ -1901,9 +2238,10 @@ async def test_database(request: Request):
             "message": f"Successfully connected to MySQL! Found {len(tables)} tables in '{database}'."
         }
     except Exception as e:
+        sanitized_err = sanitize_diagnostics(str(e), secrets=[password])
         return {
             "status": "error",
-            "message": str(e)
+            "message": sanitized_err
         }
 
 @app.post("/api/rectify")
@@ -1972,19 +2310,29 @@ async def rectify_record(request: Request):
 
                 cursor.execute("DESCRIBE master_ledgers")
                 cols = [c[0].lower() for c in cursor.fetchall()]
-                target_col = 'ledger_type' if 'ledger_type' in cols else ('name' if 'name' in cols else ('ledger' if 'ledger' in cols else cols[0]))
                 
                 set_clauses = ["category = %s"]
                 params = [value]
                 if 'major_group' in cols:
                     set_clauses.append("major_group = %s")
                     params.append(value)
-                params.extend([tenant_id, entity_name])
 
-                cursor.execute(
-                    f"UPDATE master_ledgers SET {', '.join(set_clauses)} WHERE tenant_id = %s AND `{target_col}` = %s",
-                    tuple(params)
-                )
+                match_cols = [c for c in ['ledger_type', 'group', 'name', 'ledger'] if c in cols]
+                if match_cols:
+                    where_clauses = " OR ".join([f"`{c}` = %s" for c in match_cols])
+                    params.append(tenant_id)
+                    params.extend([entity_name] * len(match_cols))
+                    cursor.execute(
+                        f"UPDATE master_ledgers SET {', '.join(set_clauses)} WHERE tenant_id = %s AND ({where_clauses})",
+                        tuple(params)
+                    )
+                else:
+                    target_col = cols[0]
+                    params.extend([tenant_id, entity_name])
+                    cursor.execute(
+                        f"UPDATE master_ledgers SET {', '.join(set_clauses)} WHERE tenant_id = %s AND `{target_col}` = %s",
+                        tuple(params)
+                    )
                 rows = cursor.rowcount
                 cursor.execute(
                     """
@@ -2194,12 +2542,17 @@ async def run_v3_migration(request: Request):
     db_password = form.get("db_password") or ""
     
     unique_id = uuid.uuid4().hex
-    temp_xml_path = f"./temp_{unique_id}.xml"
+    temp_xml_path = os.path.abspath(f"./temp_{unique_id}.xml")
+    temp_master_path = None
+    temp_manifest_path = os.path.abspath(f"./temp_manifest_{unique_id}.json")
+    file = None
+    master_file = None
     logs = ""
     manifest = None
     
     try:
         logs += f"[SYSTEM] Target DB: {db_user}@{db_host}:{db_port}/{db_name}\n"
+        logs += f"[SYSTEM] Mode: {'DRY RUN (Mathematical Verification & Invariant Proof)' if dry_run else 'LIVE MIGRATION (Production DB Write)'}\n"
         
         if source_mode == "auto":
             tally_path = form.get("tally_path")
@@ -2246,55 +2599,7 @@ async def run_v3_migration(request: Request):
                 logs += f"❌ FATAL ERROR: Could not reach Tally Server at {tally_url}.\n"
                 logs += f"Technical Details: {str(e)}\n"
                 logs += "Please ensure Tally is OPEN in the background with the company loaded before running Auto-Sync.\n"
-                return {"status": "error", "logs": logs}
-            
-        temp_master_path = None
-        if source_mode == "auto":
-            tally_path = form.get("tally_path")
-            tally_port = form.get("tally_port")
-            
-            logs += f"[SYSTEM] Initiating Port 9000 Auto-Sync Protocol...\n"
-            logs += f"[SYSTEM] Target Tally Folder: {tally_path}\n"
-            logs += f"[SYSTEM] Ping Tally Server localhost:{tally_port}... OK\n"
-            logs += f"[SYSTEM] Sending TDL Extraction Request via HTTP POST...\n"
-            logs += f"[SYSTEM] Streaming XML Data to memory...\n"
-            
-            tally_url = f"http://127.0.0.1:{tally_port}"
-            tdl_payload = '''<ENVELOPE>
-                <HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER>
-                <BODY>
-                    <EXPORTDATA>
-                        <REQUESTDESC>
-                            <REPORTNAME>Day Book</REPORTNAME>
-                            <STATICVARIABLES>
-                                <SVFROMDATE>19900401</SVFROMDATE>
-                                <SVTODATE>20300331</SVTODATE>
-                                <EXPLODEFLAG>Yes</EXPLODEFLAG>
-                                <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-                            </STATICVARIABLES>
-                        </REQUESTDESC>
-                    </EXPORTDATA>
-                </BODY>
-            </ENVELOPE>'''
-            
-            try:
-                response = requests.post(tally_url, data=tdl_payload, timeout=120)
-                response.raise_for_status()
-                
-                raw_xml = response.content.decode('utf-8', errors='ignore')
-                clean_xml = re.sub(r'&#[xX]?[0-9a-fA-F]+;', '', raw_xml)
-                clean_xml = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1F]', '', clean_xml)
-                
-                with open(temp_xml_path, "w", encoding='utf-8') as f:
-                    f.write(clean_xml)
-                    
-                size_mb = len(clean_xml.encode('utf-8')) / (1024 * 1024)
-                logs += f"✅ Successfully extracted and sanitized live database (Live Size: {size_mb:.2f} MB)\n\n"
-            except requests.exceptions.RequestException as e:
-                logs += f"❌ FATAL ERROR: Could not reach Tally Server at {tally_url}.\n"
-                logs += f"Technical Details: {str(e)}\n"
-                logs += "Please ensure Tally is OPEN in the background with the company loaded before running Auto-Sync.\n"
-                return {"status": "error", "logs": logs}
+                return {"status": "error", "logs": logs, "message": f"Could not reach Tally Server at {tally_url}."}
             
         else:
             file = form.get("file")
@@ -2303,7 +2608,11 @@ async def run_v3_migration(request: Request):
             has_master = master_file and hasattr(master_file, "file") and getattr(master_file, "filename", "")
 
             if not has_file and not has_master:
-                return {"status": "error", "logs": "FATAL: Please upload at least one Tally XML file (Transactions or Master)."}
+                return {
+                    "status": "error",
+                    "logs": "FATAL: Please upload at least one Tally XML file (Transactions or Master).",
+                    "message": "Please upload at least one Tally XML file (Transactions or Master)."
+                }
 
             if has_file:
                 with open(temp_xml_path, "wb") as buffer:
@@ -2322,48 +2631,34 @@ async def run_v3_migration(request: Request):
             else:
                 logs += f"[SYSTEM] Single XML payload mode active.\n\n"
 
+        python_exe = find_python_interpreter()
+        logs += f"[SYSTEM] Python Runtime: {python_exe}\n"
+
+        # Validate migration runner path and genuine command availability before launching subprocess
+        runner_check = resolve_and_validate_migration_runner(python_exe)
+        if not runner_check["valid"]:
+            error_msg = runner_check["message"]
+            logs += f"\n❌ FATAL ERROR: RIM Migration Runner Unavailable\n\n{error_msg}\n"
+            return {
+                "status": "error",
+                "logs": logs,
+                "message": runner_check["message"].split('\n')[0],
+                "error_type": runner_check["error_type"],
+                "component_missing": runner_check.get("component_missing"),
+                "manifest": None
+            }
+
+        backend_manage_py = runner_check["runner_path"]
+        logs += f"[SYSTEM] Migration Runner Verified: {backend_manage_py}\n"
+
         env = os.environ.copy()
-        env['DJANGO_SECRET'] = "EKfkyowEAmKkRFAP7IhUsfOleRHts7WFkMkrzOu4BzOdwuzON-STYOnjOtiJD1V6HLJ46idLb9FBW-zvk_eE_A"
+        env['DJANGO_SECRET'] = os.getenv("DJANGO_SECRET", "EKfkyowEAmKkRFAP7IhUsfOleRHts7WFkMkrzOu4BzOdwuzON-STYOnjOtiJD1V6HLJ46idLb9FBW-zvk_eE_A")
         env['DB_HOST'] = db_host
         env['DB_PORT'] = db_port
         env['DB_NAME'] = db_name
         env['DB_USER'] = db_user
         env['DB_PASSWORD'] = db_password
-        
-        temp_manifest_path = os.path.abspath(f"./temp_manifest_{unique_id}.json")
-        
-        import sys
-        python_exe = sys.executable or "python"
-        # Ensure the Python interpreter has Django installed
-        try:
-            subprocess.run([python_exe, "-c", "import django"], check=True, capture_output=True)
-        except Exception:
-            candidates = [
-                r"C:\Users\priya\AppData\Local\Programs\Python\Python311\python.exe",
-                "python",
-                "python3"
-            ]
-            for cand in candidates:
-                try:
-                    subprocess.run([cand, "-c", "import django"], check=True, capture_output=True)
-                    python_exe = cand
-                    break
-                except Exception:
-                    continue
-        backend_manage_py = os.getenv("FINPIXE_BACKEND_MANAGE_PY")
-        if not backend_manage_py or not os.path.exists(backend_manage_py):
-            candidates = [
-                os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "finpixe-latest", "backend", "manage.py")),
-                os.path.abspath(r"C:\migration tool\finpixe-latest\backend\manage.py"),
-                os.path.abspath(r"C:\Users\priya\Downloads\finpixe_rim001-main\finpixe_rim001-main\backend\manage.py"),
-            ]
-            for c in candidates:
-                if os.path.exists(c):
-                    backend_manage_py = c
-                    break
-            if not backend_manage_py:
-                backend_manage_py = "manage.py"
-        
+
         command = [
             python_exe, backend_manage_py, "run_full_migration",
             temp_xml_path,
@@ -2385,36 +2680,66 @@ async def run_v3_migration(request: Request):
             errors='replace'
         )
         stdout, _ = process.communicate()
+        exit_code = process.returncode
 
-        # Load Manifest from Disk or fallback to stdout regex
+        sanitized_stdout = sanitize_diagnostics(stdout, secrets=[db_password, env.get('DJANGO_SECRET')])
+
+        if exit_code != 0:
+            clean_stdout = re.sub(r'__RIM_JSON_START__.*?__RIM_JSON_END__', '', sanitized_stdout, flags=re.DOTALL)
+            logs += clean_stdout
+            logs += f"\n[ERROR] Migration runner failed with process exit code {exit_code}.\n"
+            return {
+                "status": "error",
+                "exit_code": exit_code,
+                "logs": logs,
+                "message": f"Migration runner failed with exit code {exit_code}.",
+                "manifest": None
+            }
+
+        # Subprocess succeeded with exit code 0!
         if os.path.exists(temp_manifest_path):
             try:
                 with open(temp_manifest_path, 'r', encoding='utf-8') as mf:
                     manifest = json.load(mf)
-            except Exception:
-                pass
+            except Exception as e:
+                logs += f"[SYSTEM] Warning: Failed to parse manifest JSON file: {e}\n"
             try:
                 os.remove(temp_manifest_path)
             except Exception:
                 pass
 
         if not manifest:
-            match = re.search(r'__RIM_JSON_START__(.*?)__RIM_JSON_END__', stdout, re.DOTALL)
+            match = re.search(r'__RIM_JSON_START__(.*?)__RIM_JSON_END__', sanitized_stdout, re.DOTALL)
             if match:
                 try:
                     manifest = json.loads(match.group(1))
                 except Exception:
                     pass
 
-        clean_stdout = re.sub(r'__RIM_JSON_START__.*?__RIM_JSON_END__', '', stdout, flags=re.DOTALL)
+        clean_stdout = re.sub(r'__RIM_JSON_START__.*?__RIM_JSON_END__', '', sanitized_stdout, flags=re.DOTALL)
         logs += clean_stdout
-        
-        return {"status": "complete", "logs": logs, "manifest": manifest}
-        
+        return {"status": "complete", "logs": logs, "manifest": manifest, "exit_code": 0}
+
     except Exception as e:
-        return {"status": "error", "logs": f"FATAL ERROR: {str(e)}"}
-        
+        sanitized_err = sanitize_diagnostics(str(e), secrets=[db_password])
+        return {
+            "status": "error",
+            "logs": logs + f"\nFATAL ERROR: {sanitized_err}\n",
+            "message": sanitized_err,
+            "manifest": None
+        }
+
     finally:
+        if file and hasattr(file, "close"):
+            try:
+                await file.close()
+            except Exception:
+                pass
+        if master_file and hasattr(master_file, "close"):
+            try:
+                await master_file.close()
+            except Exception:
+                pass
         if os.path.exists(temp_xml_path):
             try:
                 os.remove(temp_xml_path)
@@ -2423,6 +2748,11 @@ async def run_v3_migration(request: Request):
         if temp_master_path and os.path.exists(temp_master_path):
             try:
                 os.remove(temp_master_path)
+            except Exception:
+                pass
+        if os.path.exists(temp_manifest_path):
+            try:
+                os.remove(temp_manifest_path)
             except Exception:
                 pass
 

@@ -37,6 +37,10 @@ rim/__pycache__/
 *.source
 
 # ── Temporary migration artifacts & data ─────────────────────
+ec2_deployment_package*/
+finpixe_backend_apps_for_ec2*/
+finfixe_ui_update/
+*.tar.gz
 temp_*.xml
 temp_*.json
 *.sqlite3
@@ -50,6 +54,11 @@ exports/
 .env
 .env.*
 *.env
+*.pem
+*.key
+*.cert
+*.crt
+ec2_key.pem
 
 # ── IDE / OS ─────────────────────────────────────────────────
 .vscode/

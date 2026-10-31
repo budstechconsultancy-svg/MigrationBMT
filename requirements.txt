@@ -5,3 +5,4 @@ requests>=2.31.0
 lxml>=4.9.0
 rich>=13.0.0
 django>=4.2.0
+httpx>=0.24.0

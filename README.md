@@ -65,6 +65,22 @@ cd finpixe_migration_tool
 pip install -r requirements.txt
 ```
 
+### Environment Configuration
+
+Configure the backend runner location if your Django backend is located in a custom path:
+
+```bash
+# Linux / EC2:
+export FINPIXE_BACKEND_MANAGE_PY="/home/ubuntu/finpixe-deploy/backend/manage.py"
+
+# Windows (PowerShell):
+$env:FINPIXE_BACKEND_MANAGE_PY="C:\path\to\finpixe-backend\manage.py"
+```
+
+> **Note on Migration Pipeline Execution:**
+> The Migration UI validates that `manage.py` exists and contains the licensed `run_full_migration` command before execution. If the proprietary command is not installed in the target backend, the UI will report the missing dependency. Contact `budstechconsultancy@gmail.com` for licensed pipeline modules.
+
+
 ### Launch the Web UI
 
 **Option A — Batch file (Windows):**
