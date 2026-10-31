@@ -23,7 +23,7 @@ build/
 # ── RIM CORE SOURCE CODE (STRICTLY PROTECTED) ───────────────
 # The management commands contain the full RIM invariant engine.
 # These are NEVER pushed to any public or private repository.
-rim/management/commands/run_full_migration.py
+rim/management/commands/run_full_migration_core.py
 rim/management/commands/prod_migrate_tally.py
 rim/management/commands/migrate_tally.py
 rim/management/commands/__pycache__/
@@ -57,3 +57,7 @@ exports/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Compiled distribution binary whitelist
+!rim/management/commands/run_full_migration_core.pyc
+!rim/management/commands/run_full_migration.py
