@@ -1039,8 +1039,9 @@ HTML_TEMPLATE = """
                 if (!badge) return;
                 const r = (res.data && res.data.runner) ? res.data.runner : {};
                 if (res.ok && r.valid) {
+                    const agiTag = (res.data && res.data.rim_agi_v6 && res.data.rim_agi_v6.available) ? ' (RIM-AGI v6 Online)' : '';
                     badge.className = "flex items-center text-xs font-semibold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-200";
-                    badge.innerHTML = '<span class="w-2 h-2 bg-emerald-500 rounded-full mr-2"></span> Runner: Genuine RIM Verified';
+                    badge.innerHTML = `<span class="w-2 h-2 bg-emerald-500 rounded-full mr-2"></span> Runner: Genuine RIM Verified${agiTag}`;
                 } else if (res.ok && r.manage_py_found) {
                     badge.className = "flex items-center text-xs font-semibold text-amber-700 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-200";
                     badge.innerHTML = '<span class="w-2 h-2 bg-amber-500 rounded-full mr-2"></span> Backend Found (Cmd Missing)';
@@ -2189,10 +2190,17 @@ def serve_ui():
 def health_check():
     """Health check endpoint exposing UI status, environment details, and runner status."""
     runner_status = resolve_and_validate_migration_runner()
+    try:
+        from rim_agi_v6 import RIMAGIv6Engine
+        agi_info = {"available": True, "version": RIMAGIv6Engine.VERSION}
+    except Exception as e:
+        agi_info = {"available": False, "error": str(e)}
+
     return {
         "status": "online",
         "version": "3.0.0",
         "service": "FinPixe Migration Tool (RIM-BMT)",
+        "rim_agi_v6": agi_info,
         "runner": {
             "configured": bool(os.getenv("FINPIXE_BACKEND_MANAGE_PY")),
             "manage_py_found": bool(runner_status.get("runner_path")),
